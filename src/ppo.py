@@ -143,19 +143,19 @@ def train_ppo(env, agent:PPOAgent, loss_func:LossFunctions, value_loss_coef:floa
             buffer.add(state, action, log_prob, reward, done, value)
             
             state = next_state
-            ep_reward += reward
+            ep_reward += reward #reward is log return, so we can sum
             if done:
                 break
-
+        
         # Compute GAE
         advantages, returns = compute_gae(buffer.rewards, buffer.values, buffer.dones, agent.gamma, agent.lamda)
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8) #Improve stability and convergence
-
+        
         # Convert to tensors
         states = torch.tensor(buffer.states, dtype=torch.float32)
         actions = torch.tensor(buffer.actions, dtype=torch.float32)
         old_log_probs = torch.stack(buffer.log_probs).detach()
-
+        
         # Update PPO
         for _ in range(update_steps):
             mu, std = agent.policy(states)
@@ -167,8 +167,10 @@ def train_ppo(env, agent:PPOAgent, loss_func:LossFunctions, value_loss_coef:floa
             policy_loss = loss_func.policy_loss_func(log_probs, old_log_probs, advantages, tol=agent.clip_eps)
             value_loss = loss_func.value_loss_func(returns, values)
             loss = loss_func.total_loss(policy_loss, value_loss, value_loss_coef)
+            
             agent.optimizer.zero_grad() #clear old gradients
             loss.backward() #compute new gradients
             agent.optimizer.step() #update weights
-
-        print(f"Epoch {ep+1}: Reward={ep_reward:.6f}, Balance={info['balance']:.6f}")
+        
+        ep_reward = np.exp(ep_reward) - 1 #Convert back to simple return
+        print(f"Epoch {ep+1}: Reward={ep_reward:.4%}, Balance={info['balance']:.6f}")

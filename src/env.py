@@ -62,10 +62,10 @@ class PortfolioEnv:
     
     def _getreturns(self) -> np.ndarray:
         return_cols = self.df.filter(like='log_returns')
-        return_vals = return_cols.iloc[self.t].values
+        return_vals = return_cols.iloc[self.t+1].values #next day return
         return return_vals
     
-    def step(self, weights:np.ndarray) -> tuple[np.ndarray, np.ndarray, bool, dict]:
+    def step(self, weights:np.ndarray) -> tuple[np.ndarray, float, bool, dict]:
         norm_weights = weights/ (weights.sum() + 1e-8) #Enforces that weights sum to 1
         
         return_vals = self._getreturns()
@@ -73,5 +73,5 @@ class PortfolioEnv:
         self.balance *= np.exp(reward)
         
         self.t += 1
-        done = self.t >= (len(self.df) - 1)
+        done = self.t >= (len(self.df) - 2)
         return self._getstate(), reward, done, {'balance': self.balance}
