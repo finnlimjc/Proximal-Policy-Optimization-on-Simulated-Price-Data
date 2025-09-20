@@ -19,7 +19,7 @@ class GaussianPolicy(nn.Module):
     def forward(self, x):
         x = self.shared(x)
         mu = self.mu_head(x)
-        log_std = self.log_std_head(x).clamp(-5, 3)  #Ensures a reasonable range
+        log_std = self.log_std_head(x).clamp(-2, 1)  #Ensures a reasonable range
         std = torch.exp(log_std)
         return mu, std
 
@@ -86,7 +86,7 @@ class LossFunctions:
     def value_loss_func(self, returns:torch.Tensor, values:torch.Tensor) -> torch.Tensor:
         diff = returns-values
         mse = diff.pow(2)
-        return mse.mean()
+        return mse.mean() #Would be negative as the objective is V >= R
     
     def total_loss(self, policy_loss:torch.Tensor, value_loss:torch.Tensor, value_coef:float=0.5) -> torch.Tensor:
         return policy_loss + value_coef*value_loss

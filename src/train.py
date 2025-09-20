@@ -64,25 +64,51 @@ class TrainPPO:
         
         return (buffer, info, ep_reward)
     
-    def _update(self, value_loss_coef:float, update_steps:int, advantages:torch.Tensor, returns:torch.Tensor, states:torch.Tensor, actions:torch.Tensor, old_log_probs:torch.Tensor) -> tuple[float, float, float]:
+    def _gradient_logger(self, agent_policy) -> float:
+        total_norm = 0
+        for p in agent_policy.parameters():
+            if p.grad is not None:
+                total_norm += p.grad.data.norm(2).item()**2
+        return np.sqrt(total_norm)
+    
+    def _update(self, value_loss_coef:float, entropy_coef:float, update_steps:int, 
+                advantages:torch.Tensor, returns:torch.Tensor, states:torch.Tensor, 
+                actions:torch.Tensor, old_log_probs:torch.Tensor, log_grads:bool=False) -> dict:
+        
+        grad_norms = []
         for _ in range(update_steps):
             mu, std = self.agent.policy(states)
             dist = torch.distributions.Normal(mu, std)
             log_probs = dist.log_prob(actions).sum(dim=-1)
             
             values = self.agent.value(states).squeeze()
+            entropy = dist.entropy().mean()
             
             policy_loss = self.loss_func.policy_loss_func(log_probs, old_log_probs, advantages, tol=self.agent.clip_eps)
             value_loss = self.loss_func.value_loss_func(returns, values)
-            loss = self.loss_func.total_loss(policy_loss, value_loss, value_loss_coef)
+            loss = self.loss_func.total_loss(policy_loss, value_loss, value_loss_coef) - entropy_coef*entropy
             
             self.agent.optimizer.zero_grad() #clear old gradients
             loss.backward() #compute new gradients
+            if log_grads:
+                total_norm = self._gradient_logger(self.agent.policy)
+                grad_norms.append(total_norm)
+            
             self.agent.optimizer.step() #update weights
         
-        return (policy_loss.item(), value_loss.item(), loss.item())
-
-    def train_ppo(self, value_loss_coef:float=0.5, epochs=10, timesteps=256, update_steps=32, logging:bool=False, silent:bool=False):
+        log_values = { 
+            'policy_loss': policy_loss.item(),
+            'value_loss': value_loss.item(),
+            'total_loss': loss.item(),
+            'entropy': entropy.item()
+        }
+        if log_grads:
+            log_values['avg_grad_norm'] = sum(grad_norms)/len(grad_norms)
+        
+        return log_values
+    
+    def train_ppo(self, value_loss_coef:float=0.5, entropy_coef:float=0.01, epochs=10, timesteps=256, update_steps=32, 
+                  silent:bool=False, log_grads:bool=False) -> list[dict]:
         logger = []
         for ep in range(1, epochs+1):
             buffer = RolloutBuffer()
@@ -98,20 +124,14 @@ class TrainPPO:
             actions = torch.tensor(np.array(buffer.actions), dtype=torch.float32)
             old_log_probs = torch.stack(buffer.log_probs).detach()
             
-            policy_loss, value_loss, total_loss = self._update(value_loss_coef, update_steps, advantages, returns, states, actions, old_log_probs)
+            ep_log = self._update(value_loss_coef, entropy_coef, update_steps, advantages, returns, states, actions, old_log_probs, log_grads=log_grads)
             ep_reward = np.exp(ep_reward) - 1 #Convert back to simple return
             
             if not silent:
                 print(f"Epoch {ep}: Reward={ep_reward:.4%}, Balance={info['balance']:.6f}")
             
-            if logging:
-                ep_log = {
-                    'epoch': ep,
-                    'reward': ep_reward,
-                    'policy_loss': policy_loss,
-                    'value_loss': value_loss,
-                    'total_loss': total_loss
-                }
-                logger.append(ep_log)
+            ep_log['epoch'] = ep
+            ep_log['reward'] = ep_reward
+            logger.append(ep_log)
         
         return logger
